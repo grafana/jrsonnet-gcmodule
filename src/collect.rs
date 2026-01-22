@@ -169,9 +169,9 @@ impl ObjectSpace {
     /// Returns true if this [`ObjectSpace`] is empty (has no objects).
     pub fn is_empty(&self) -> bool {
         let list: &GcHeader = &self.list.borrow();
-        list.next.get() == ptr::null() &&
-        list.prev.get() == ptr::null() &&
-        list.ccdyn_vptr == CcDummy::ccdyn_vptr()
+        ptr::eq(list.next.get(), list) &&
+        ptr::eq(list.prev.get(), list) &&
+        ptr::eq(list.ccdyn_vptr, CcDummy::ccdyn_vptr())
     }
 
     /// Drops every value in the [`ObjectSpace`] without checking for cycles or
