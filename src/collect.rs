@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::pin::Pin;
+use std::ptr;
 
 /// Provides advanced explicit control about where to store [`Cc`](type.Cc.html)
 /// objects.
@@ -165,6 +166,28 @@ impl ObjectSpace {
         Cc::new_in_space(value, self)
     }
 
+    /// Returns true if this [`ObjectSpace`] is empty (has no objects).
+    pub fn is_empty(&self) -> bool {
+        let list: &GcHeader = &self.list.borrow();
+        list.next.get() == ptr::null() &&
+        list.prev.get() == ptr::null() &&
+        list.ccdyn_vptr == CcDummy::ccdyn_vptr()
+    }
+
+    /// Drops every value in the [`ObjectSpace`] without checking for cycles or
+    /// remaining references.
+    /// 
+    /// This is ONLY safe to call if you previously verified `is_empty` to be
+    /// true before creating objects and you are not actively using any of the
+    /// objects you created in this `ObjectSpace` since then.
+    pub unsafe fn empty_without_collecting_cycles(&self) {
+        {
+            let list: &GcHeader = &self.list.borrow();
+            release_all(list, ());
+        }
+        *self.list.borrow_mut() = new_gc_list();
+    }
+
     /// Leak all objects allocated in this space
     pub fn leak(&self) {
         *self.list.borrow_mut() = new_gc_list();
@@ -181,12 +204,15 @@ impl Drop for ObjectSpace {
 }
 
 pub trait Linked {
+    unsafe fn dealloc(&self);
     fn next(&self) -> *const Self;
     fn prev(&self) -> *const Self;
     fn set_prev(&self, other: *const Self);
 
     /// Get the trait object to operate on the actual `CcBox`.
     fn value(&self) -> &dyn CcDyn;
+    /// Get the trait object to operate on the actual `CcBox`, but mutable.
+    fn value_mut(&self) -> &mut dyn CcDyn;
 }
 
 /// Internal metadata used by the cycle collector.
@@ -202,6 +228,11 @@ pub struct GcHeader {
 
 impl Linked for GcHeader {
     #[inline]
+    unsafe fn dealloc(&self) {
+        self.value_mut().dealloc();
+    }
+
+    #[inline]
     fn next(&self) -> *const Self {
         self.next.get()
     }
@@ -215,6 +246,16 @@ impl Linked for GcHeader {
     }
     #[inline]
     fn value(&self) -> &dyn CcDyn {
+        // safety: To build trait object from self and vtable pointer.
+        // Test by test_gc_header_value_consistency().
+        unsafe {
+            let fat_ptr: (*const (), *const ()) =
+                ((self as *const Self).offset(1) as _, self.ccdyn_vptr);
+            mem::transmute(fat_ptr)
+        }
+    }
+    #[inline]
+    fn value_mut(&self) -> &mut dyn CcDyn {    
         // safety: To build trait object from self and vtable pointer.
         // Test by test_gc_header_value_consistency().
         unsafe {
@@ -358,6 +399,17 @@ fn mark_reachable<L: Linked>(list: &L) {
             header.value().gc_traverse(&mut revive::<L>)
         }
     });
+}
+
+unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
+    let mut count = 0;
+    visit_list(list, |header| {
+        // Safety: visit_list saves the "next" pointer before calling the
+        // function in the loop.
+        unsafe { header.dealloc(); }
+        count += 1;
+    });
+    count
 }
 
 /// Release unreachable objects in the linked list.
