@@ -180,7 +180,7 @@ impl ObjectSpace {
     /// This is ONLY safe to call if you previously verified `is_empty` to be
     /// true before creating objects and you are not actively using any of the
     /// objects you created in this `ObjectSpace` since then.
-    pub unsafe fn empty_without_collecting_cycles(&self) {
+    pub unsafe fn empty_without_checking_cycles(&self) {
         {
             let list: &GcHeader = &self.list.borrow();
             release_all(list, ());
