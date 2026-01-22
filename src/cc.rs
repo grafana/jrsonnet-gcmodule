@@ -95,12 +95,6 @@ impl<T: UnwindSafe + ?Sized, O: AbstractObjectSpace> UnwindSafe for RawWeak<T, O
 ///
 /// This is a private type.
 pub trait CcDyn {
-    /// Deallocate the object directly.
-    ///
-    /// This method is unsafe because it ignores refcount and invalidates the
-    /// pointer used to call it. Use with care.
-    unsafe fn dealloc(&mut self);
-
     /// Returns the reference count for cycle detection.
     fn gc_ref_count(&self) -> usize;
 
@@ -144,7 +138,6 @@ impl CcDummy {
 }
 
 impl CcDyn for CcDummy {
-    unsafe fn dealloc(&mut self) {}
     fn gc_ref_count(&self) -> usize {
         1
     }
@@ -647,10 +640,6 @@ impl<T: ?Sized, O: AbstractObjectSpace> Drop for RawWeak<T, O> {
 }
 
 impl<T: Trace + ?Sized, O: AbstractObjectSpace> CcDyn for RawCcBox<T, O> {
-    unsafe fn dealloc(&mut self) {
-        drop_ccbox(self);
-    }
-
     fn gc_ref_count(&self) -> usize {
         self.ref_count()
     }

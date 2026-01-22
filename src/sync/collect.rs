@@ -178,10 +178,6 @@ impl ThreadedObjectSpace {
 
 impl Linked for Header {
     #[inline]
-    unsafe fn dealloc(&self) {
-        self.value_mut().dealloc();
-    }
-    #[inline]
     fn next(&self) -> *const Self {
         self.next.get()
     }
@@ -195,16 +191,6 @@ impl Linked for Header {
     }
     #[inline]
     fn value(&self) -> &dyn CcDyn {
-        // safety: To build trait object from self and vtable pointer.
-        // Test by test_gc_header_value_consistency().
-        unsafe {
-            let fat_ptr: (*const (), *const ()) =
-                ((self as *const Self).offset(1) as _, self.ccdyn_vptr);
-            mem::transmute(fat_ptr)
-        }
-    }
-    #[inline]
-    fn value_mut(&self) -> &mut dyn CcDyn {
         // safety: To build trait object from self and vtable pointer.
         // Test by test_gc_header_value_consistency().
         unsafe {

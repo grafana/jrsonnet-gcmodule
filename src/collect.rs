@@ -204,15 +204,12 @@ impl Drop for ObjectSpace {
 }
 
 pub trait Linked {
-    unsafe fn dealloc(&self);
     fn next(&self) -> *const Self;
     fn prev(&self) -> *const Self;
     fn set_prev(&self, other: *const Self);
 
     /// Get the trait object to operate on the actual `CcBox`.
     fn value(&self) -> &dyn CcDyn;
-    /// Get the trait object to operate on the actual `CcBox`, but mutable.
-    fn value_mut(&self) -> &mut dyn CcDyn;
 }
 
 /// Internal metadata used by the cycle collector.
@@ -228,11 +225,6 @@ pub struct GcHeader {
 
 impl Linked for GcHeader {
     #[inline]
-    unsafe fn dealloc(&self) {
-        self.value_mut().dealloc();
-    }
-
-    #[inline]
     fn next(&self) -> *const Self {
         self.next.get()
     }
@@ -246,16 +238,6 @@ impl Linked for GcHeader {
     }
     #[inline]
     fn value(&self) -> &dyn CcDyn {
-        // safety: To build trait object from self and vtable pointer.
-        // Test by test_gc_header_value_consistency().
-        unsafe {
-            let fat_ptr: (*const (), *const ()) =
-                ((self as *const Self).offset(1) as _, self.ccdyn_vptr);
-            mem::transmute(fat_ptr)
-        }
-    }
-    #[inline]
-    fn value_mut(&self) -> &mut dyn CcDyn {    
         // safety: To build trait object from self and vtable pointer.
         // Test by test_gc_header_value_consistency().
         unsafe {
@@ -403,12 +385,27 @@ fn mark_reachable<L: Linked>(list: &L) {
 
 unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     let mut count = 0;
+    
+    let mut to_drop = Vec::new();
     visit_list(list, |header| {
-        // Safety: visit_list saves the "next" pointer before calling the
-        // function in the loop.
-        unsafe { header.dealloc(); }
+        to_drop.push(header.value().gc_clone());
         count += 1;
     });
+    
+    restore_prev(list);
+
+    #[cfg(feature = "debug")]
+    {
+        crate::debug::GC_DROPPING.with(|d| d.set(true));
+    }
+    for value in to_drop {
+        value.gc_drop_t();
+    }
+    #[cfg(feature = "debug")]
+    {
+        crate::debug::GC_DROPPING.with(|d| d.set(false));
+    }
+    
     count
 }
 
