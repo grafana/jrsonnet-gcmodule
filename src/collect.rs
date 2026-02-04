@@ -184,12 +184,9 @@ impl ObjectSpace {
         Cc::new_in_space(value, self)
     }
 
-    /// Returns true if this [`ObjectSpace`] is empty (has no objects).
+    /// Returns true if this [`ObjectSpace`] is empty (has no tracked objects).
     pub fn is_empty(&self) -> bool {
-        let list: &GcHeader = &self.list.borrow();
-        ptr::eq(list.next.get(), list) &&
-        ptr::eq(list.prev.get(), list) &&
-        ptr::eq(list.ccdyn_vptr, CcDummy::ccdyn_vptr())
+        self.count_tracked() == 0
     }
 
     /// Drops every value in the [`ObjectSpace`] without checking for cycles or
@@ -406,11 +403,27 @@ fn mark_reachable<L: Linked>(list: &L) {
 
 unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     let mut count = 0;
-    
+
+    //let mut to_drop = Vec::new();
+
     visit_list(list, |header| {
         header.value().gc_clone().gc_drop_t();
         count += 1;
     });
+
+    /* #[cfg(feature = "debug")]
+    {
+        crate::debug::GC_DROPPING.with(|d| d.set(true));
+    }
+
+    for value in to_drop {
+        value.gc_drop_t();
+    }
+
+    #[cfg(feature = "debug")]
+    {
+        crate::debug::GC_DROPPING.with(|d| d.set(false));
+    } */
     
     count
 }

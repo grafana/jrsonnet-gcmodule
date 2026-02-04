@@ -1,5 +1,5 @@
 use crate::testutil::test_small_graph;
-use crate::{collect, Cc, Trace, Tracer};
+use crate::{collect, Cc, ObjectSpace, Trace, Tracer};
 use crate::{debug, with_thread_object_space, Weak};
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -539,6 +539,54 @@ fn test_weak_ptr_eq() {
 
     assert!(Weak::ptr_eq(&a, &b));
     assert!(!Weak::ptr_eq(&a, &c));
+}
+
+#[test]
+fn test_empty_without_checking_cycles_simple() {
+    let object_space = ObjectSpace::default();
+    assert!(object_space.is_empty());
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct Value(usize);
+    impl Trace for Value {
+        fn is_type_tracked() -> bool {
+            true
+        }
+    }
+
+    let a = object_space.create(Value(1));
+    let b = a.clone();
+    assert_eq!(a.deref().0, 1);
+    assert_eq!(a.deref().0, b.deref().0);
+    assert!(!object_space.is_empty());
+
+    std::mem::forget(a);
+    std::mem::forget(b);
+    unsafe { object_space.empty_without_checking_cycles() }
+    assert!(object_space.is_empty());
+}
+
+#[test]
+fn test_empty_without_checking_cycles_cycles() {
+    let object_space = ObjectSpace::default();
+    assert!(object_space.is_empty());
+
+    let a: Cc<RefCell<Vec<Box<dyn Trace>>>> = object_space.create(RefCell::new(Vec::new()));
+    let b: Cc<RefCell<Vec<Box<dyn Trace>>>> = object_space.create(RefCell::new(Vec::new()));
+    {
+        let mut a = a.borrow_mut();
+        a.push(Box::new(b.clone()));
+    }
+    {
+        let mut b = b.borrow_mut();
+        b.push(Box::new(a.clone()));
+    }
+    assert!(!object_space.is_empty());
+
+    std::mem::forget(a);
+    std::mem::forget(b);
+    unsafe { object_space.empty_without_checking_cycles() }
+    assert!(object_space.is_empty());
 }
 
 #[cfg(not(miri))]
