@@ -59,7 +59,6 @@ use std::ptr;
 pub struct ObjectSpace {
     /// Linked list to the tracked objects.
     pub(crate) list: RefCell<Pin<Box<GcHeader>>>,
-    pub(crate) emptying_without_checking_cycles: Cell<bool>,
 
     /// Mark `ObjectSpace` as `!Send` and `!Sync`. This enforces thread-exclusive
     /// access to the linked list so methods can use `&self` instead of
@@ -106,17 +105,27 @@ impl AbstractObjectSpace for ObjectSpace {
 
     #[inline]
     fn remove(header: &Self::Header) {
-        let header: &GcHeader = header;
-        debug_assert!(!header.next.get().is_null());
-        debug_assert!(!header.prev.get().is_null());
-        let next = header.next.get();
-        let prev = header.prev.get();
-        // safety: The linked list is maintained. Pointers in it are valid.
-        unsafe {
-            (*prev).next.set(next);
-            (*next).prev.set(prev);
-        }
-        header.next.set(std::ptr::null_mut());
+        let remove = || {
+            let header: &GcHeader = header;
+            debug_assert!(!header.next.get().is_null());
+            debug_assert!(!header.prev.get().is_null());
+            let next = header.next.get();
+            let prev = header.prev.get();
+            // safety: The linked list is maintained. Pointers in it are valid.
+            unsafe {
+                (*prev).next.set(next);
+                (*next).prev.set(prev);
+            }
+            header.next.set(std::ptr::null_mut());
+        };
+        EMPTYING_WITHOUT_CHECKING_CYCLES
+            .try_with(|emptying_without_checking_cycles| {
+                if emptying_without_checking_cycles.get() {
+                    return;
+                }
+                remove()
+            })
+            .unwrap_or_else(|_| remove())
     }
 
     #[inline]
@@ -136,7 +145,6 @@ impl Default for ObjectSpace {
         let header = new_gc_list();
         Self {
             list: RefCell::new(header),
-            emptying_without_checking_cycles: Cell::new(false),
             _phantom: PhantomData,
         }
     }
@@ -154,9 +162,16 @@ impl ObjectSpace {
     /// Collect cyclic garbage tracked by this [`ObjectSpace`](struct.ObjectSpace.html).
     /// Return the number of objects collected.
     pub fn collect_cycles(&self) -> usize {
-        if self.emptying_without_checking_cycles.get() { return 0; }
-        let list: &GcHeader = &self.list.borrow();
-        collect_list(list, ())
+        let collect_cycles = || {
+            let list: &GcHeader = &self.list.borrow();
+            collect_list(list, ())
+        };
+        EMPTYING_WITHOUT_CHECKING_CYCLES
+            .try_with(|emptying_without_checking_cycles| {
+                if emptying_without_checking_cycles.get() { return 0; }
+                collect_cycles()
+            })
+            .unwrap_or_else(|_| collect_thread_cycles())
     }
 
     /// Constructs a new [`Cc<T>`](type.Cc.html) in this
@@ -184,11 +199,12 @@ impl ObjectSpace {
     /// true before creating objects and you are not actively using any of the
     /// objects you created in this `ObjectSpace` since then.
     pub unsafe fn empty_without_checking_cycles(&self) {
-        {
-            self.emptying_without_checking_cycles.set(true);
+        EMPTYING_WITHOUT_CHECKING_CYCLES.with(|emptying_without_checking_cycles| {
+            let old_emptying_without_checking_cycles = emptying_without_checking_cycles.replace(true);
             let list: &GcHeader = &self.list.borrow();
             release_all(list, ());
-        }
+            emptying_without_checking_cycles.set(old_emptying_without_checking_cycles);
+        });
         *self.list.borrow_mut() = new_gc_list();
     }
 
@@ -279,6 +295,7 @@ pub fn count_thread_tracked() -> usize {
 }
 
 thread_local!(pub(crate) static THREAD_OBJECT_SPACE: ObjectSpace = ObjectSpace::default());
+thread_local!(pub(crate) static EMPTYING_WITHOUT_CHECKING_CYCLES: Cell<bool> = Cell::new(false));
 
 /// Acquire reference to thread-local global object space
 pub fn with_thread_object_space<R>(handler: impl FnOnce(&ObjectSpace) -> R) -> R {
