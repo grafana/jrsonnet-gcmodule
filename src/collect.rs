@@ -59,6 +59,7 @@ use std::ptr;
 pub struct ObjectSpace {
     /// Linked list to the tracked objects.
     pub(crate) list: RefCell<Pin<Box<GcHeader>>>,
+    pub(crate) emptying_without_checking_cycles: Cell<bool>,
 
     /// Mark `ObjectSpace` as `!Send` and `!Sync`. This enforces thread-exclusive
     /// access to the linked list so methods can use `&self` instead of
@@ -135,6 +136,7 @@ impl Default for ObjectSpace {
         let header = new_gc_list();
         Self {
             list: RefCell::new(header),
+            emptying_without_checking_cycles: Cell::new(false),
             _phantom: PhantomData,
         }
     }
@@ -152,6 +154,7 @@ impl ObjectSpace {
     /// Collect cyclic garbage tracked by this [`ObjectSpace`](struct.ObjectSpace.html).
     /// Return the number of objects collected.
     pub fn collect_cycles(&self) -> usize {
+        if self.emptying_without_checking_cycles.get() { return 0; }
         let list: &GcHeader = &self.list.borrow();
         collect_list(list, ())
     }
@@ -182,6 +185,7 @@ impl ObjectSpace {
     /// objects you created in this `ObjectSpace` since then.
     pub unsafe fn empty_without_checking_cycles(&self) {
         {
+            self.emptying_without_checking_cycles.set(true);
             let list: &GcHeader = &self.list.borrow();
             release_all(list, ());
         }
@@ -386,25 +390,10 @@ fn mark_reachable<L: Linked>(list: &L) {
 unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     let mut count = 0;
     
-    let mut to_drop = Vec::new();
     visit_list(list, |header| {
-        to_drop.push(header.value().gc_clone());
+        header.value().gc_clone().gc_drop_t();
         count += 1;
     });
-    
-    restore_prev(list);
-
-    #[cfg(feature = "debug")]
-    {
-        crate::debug::GC_DROPPING.with(|d| d.set(true));
-    }
-    for value in to_drop {
-        value.gc_drop_t();
-    }
-    #[cfg(feature = "debug")]
-    {
-        crate::debug::GC_DROPPING.with(|d| d.set(false));
-    }
     
     count
 }
