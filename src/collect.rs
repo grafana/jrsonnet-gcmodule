@@ -104,28 +104,18 @@ impl AbstractObjectSpace for ObjectSpace {
     }
 
     #[inline]
-    fn remove(header: &Self::Header) {
-        let remove = || {
-            let header: &GcHeader = header;
-            debug_assert!(!header.next.get().is_null());
-            debug_assert!(!header.prev.get().is_null());
-            let next = header.next.get();
-            let prev = header.prev.get();
-            // safety: The linked list is maintained. Pointers in it are valid.
-            unsafe {
-                (*prev).next.set(next);
-                (*next).prev.set(prev);
-            }
-            header.next.set(std::ptr::null_mut());
-        };
-        EMPTYING_WITHOUT_CHECKING_CYCLES
-            .try_with(|emptying_without_checking_cycles| {
-                if emptying_without_checking_cycles.get() {
-                    return;
-                }
-                remove()
-            })
-            .unwrap_or_else(|_| remove())
+    fn remove(header: &Self::Header) {        
+        let header: &GcHeader = header;
+        debug_assert!(!header.next.get().is_null());
+        debug_assert!(!header.prev.get().is_null());
+        let next = header.next.get();
+        let prev = header.prev.get();
+        // safety: The linked list is maintained. Pointers in it are valid.
+        unsafe {
+            (*prev).next.set(next);
+            (*next).prev.set(prev);
+        }
+        header.next.set(std::ptr::null_mut());
     }
 
     #[inline]
@@ -404,14 +394,14 @@ fn mark_reachable<L: Linked>(list: &L) {
 unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     let mut count = 0;
 
-    //let mut to_drop = Vec::new();
+    let mut to_drop = Vec::new();
 
     visit_list(list, |header| {
-        header.value().gc_clone().gc_drop_t();
+        to_drop.push(header.value().gc_clone());
         count += 1;
     });
 
-    /* #[cfg(feature = "debug")]
+    #[cfg(feature = "debug")]
     {
         crate::debug::GC_DROPPING.with(|d| d.set(true));
     }
@@ -423,7 +413,7 @@ unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     #[cfg(feature = "debug")]
     {
         crate::debug::GC_DROPPING.with(|d| d.set(false));
-    } */
+    }
     
     count
 }
