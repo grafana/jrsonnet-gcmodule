@@ -171,7 +171,7 @@ impl ObjectSpace {
                 if emptying_without_checking_cycles.get() { return 0; }
                 collect_cycles()
             })
-            .unwrap_or_else(|_| collect_thread_cycles())
+            .unwrap_or_else(|_| collect_cycles())
     }
 
     /// Constructs a new [`Cc<T>`](type.Cc.html) in this
