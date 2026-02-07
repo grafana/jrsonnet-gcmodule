@@ -104,7 +104,7 @@ impl AbstractObjectSpace for ObjectSpace {
     }
 
     #[inline]
-    fn remove(header: &Self::Header) {        
+    fn remove(header: &Self::Header) {
         let header: &GcHeader = header;
         debug_assert!(!header.next.get().is_null());
         debug_assert!(!header.prev.get().is_null());
@@ -158,7 +158,9 @@ impl ObjectSpace {
         };
         EMPTYING_WITHOUT_CHECKING_CYCLES
             .try_with(|emptying_without_checking_cycles| {
-                if emptying_without_checking_cycles.get() { return 0; }
+                if emptying_without_checking_cycles.get() {
+                    return 0;
+                }
                 collect_cycles()
             })
             .unwrap_or_else(|_| collect_cycles())
@@ -181,13 +183,14 @@ impl ObjectSpace {
 
     /// Drops every value in the [`ObjectSpace`] without checking for cycles or
     /// remaining references.
-    /// 
+    ///
     /// This is ONLY safe to call if you previously verified `is_empty` to be
     /// true before creating objects and you are not actively using any of the
     /// objects you created in this `ObjectSpace` since then.
     pub unsafe fn empty_without_checking_cycles(&self) {
         EMPTYING_WITHOUT_CHECKING_CYCLES.with(|emptying_without_checking_cycles| {
-            let old_emptying_without_checking_cycles = emptying_without_checking_cycles.replace(true);
+            let old_emptying_without_checking_cycles =
+                emptying_without_checking_cycles.replace(true);
             let list: &GcHeader = &self.list.borrow();
             release_all(list, ());
             emptying_without_checking_cycles.set(old_emptying_without_checking_cycles);
@@ -414,7 +417,7 @@ unsafe fn release_all<L: Linked, K>(list: &L, _lock: K) -> usize {
     {
         crate::debug::GC_DROPPING.with(|d| d.set(false));
     }
-    
+
     count
 }
 

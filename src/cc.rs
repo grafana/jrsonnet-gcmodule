@@ -610,7 +610,26 @@ impl<T: ?Sized, O: AbstractObjectSpace> Drop for RawCc<T, O> {
                 // safety: CcBox lifetime maintained by ref count.
                 drop_ccbox(ptr);
             } else {
+                // Add a temporary weak reference to prevent Weak::drop from
+                // deallocating the CcBox while T is being dropped. Without
+                // this guard, dropping T can trigger Weak::drop for a weak
+                // reference pointing back to this same object (e.g. from a
+                // value_cache HashMap entry). That Weak::drop would see
+                // ref_count==0 and weak_count==0, call drop_ccbox, and free
+                // the CcBox memory while T's destructor is still running -
+                // causing a use-after-free / SIGSEGV.
+                //
+                // This mirrors the approach used by std::rc::Rc.
+                inner.ref_count.inc_weak();
                 inner.drop_t();
+                // Now remove the guard. If all real weak refs were dropped
+                // during T's destructor, this is the last one and we must
+                // deallocate.
+                let old_weak = inner.ref_count.dec_weak();
+                if old_weak == 1 {
+                    // safety: ref_count is 0, weak_count is 0, T is dropped.
+                    drop_ccbox(ptr);
+                }
             }
         }
     }
