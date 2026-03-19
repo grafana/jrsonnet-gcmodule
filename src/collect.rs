@@ -149,7 +149,7 @@ impl AbstractObjectSpace for ObjectSpace {
 }
 
 /// Default auto-collection threshold (same as CPython's generation 0).
-const DEFAULT_THRESHOLD: usize = 700;
+const DEFAULT_THRESHOLD: usize = 4096;
 
 impl Default for ObjectSpace {
     /// Constructs an empty [`ObjectSpace`](struct.ObjectSpace.html).
@@ -226,6 +226,7 @@ impl ObjectSpace {
         let threshold = self.threshold.get();
         if threshold > 0 && count > threshold {
             self.maybe_collect();
+            self.threshold.set((threshold + (threshold / 2)).next_power_of_two());
         }
     }
 
