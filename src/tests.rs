@@ -1,5 +1,5 @@
 use crate::testutil::test_small_graph;
-use crate::{Cc, Trace, Tracer, collect, collect_thread_cycles};
+use crate::{Cc, ObjectSpace, Trace, Tracer, collect, collect_thread_cycles};
 use crate::{Weak, debug, with_thread_object_space};
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -585,4 +585,81 @@ fn weak_double_free() {
     collect_thread_cycles();
     drop(w1);
     drop(w2);
+}
+
+#[test]
+fn test_auto_collect_object_space() {
+    let space = ObjectSpace::default();
+    space.set_threshold(5);
+
+    // Create a cycle that won't be dropped without collection.
+    {
+        type List = Cc<RefCell<Vec<TraceBox<dyn Trace>>>>;
+        let a: List = space.create(Default::default());
+        let b: List = space.create(Default::default());
+        a.borrow_mut().push(TraceBox(Box::new(b.clone())));
+        b.borrow_mut().push(TraceBox(Box::new(a.clone())));
+    }
+    // 2 tracked objects, threshold is 5, no auto-collect yet.
+    assert_eq!(space.count_tracked(), 2);
+
+    // Allocate more tracked objects to exceed threshold.
+    {
+        for _ in 0..4 {
+            let _: Cc<RefCell<Vec<TraceBox<dyn Trace>>>> = space.create(Default::default());
+        }
+    }
+
+    // Auto-collection should have been triggered, collecting the 2-object cycle.
+    // The 4 non-cyclic objects were dropped (refcount went to 0) so they're not
+    // tracked anymore either. Only if some are still alive would they remain.
+    assert_eq!(space.count_tracked(), 0);
+}
+
+#[test]
+fn test_auto_collect_disabled() {
+    let space = ObjectSpace::default();
+    space.disable_auto_collect();
+
+    // Create a cycle.
+    {
+        type List = Cc<RefCell<Vec<TraceBox<dyn Trace>>>>;
+        let a: List = space.create(Default::default());
+        let b: List = space.create(Default::default());
+        a.borrow_mut().push(TraceBox(Box::new(b.clone())));
+        b.borrow_mut().push(TraceBox(Box::new(a.clone())));
+    }
+
+    // Allocate many more objects — no auto-collection should happen.
+    for _ in 0..1000 {
+        let _: Cc<RefCell<Vec<TraceBox<dyn Trace>>>> = space.create(Default::default());
+    }
+
+    // The cycle should still be there since auto-collect is disabled.
+    assert_eq!(space.count_tracked(), 2);
+
+    // Manual collection should still work.
+    assert_eq!(space.collect_cycles(), 2);
+    assert_eq!(space.count_tracked(), 0);
+}
+
+#[test]
+fn test_threshold_api() {
+    let space = ObjectSpace::default();
+    assert_eq!(space.get_threshold(), 700); // default
+
+    space.set_threshold(100);
+    assert_eq!(space.get_threshold(), 100);
+
+    space.disable_auto_collect();
+    assert_eq!(space.get_threshold(), 0);
+}
+
+#[test]
+fn test_thread_threshold_api() {
+    crate::set_thread_collect_threshold(500);
+    assert_eq!(crate::get_thread_collect_threshold(), 500);
+
+    // Restore default for other tests.
+    crate::set_thread_collect_threshold(700);
 }

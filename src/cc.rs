@@ -205,6 +205,7 @@ impl<T: Trace, O: AbstractObjectSpace> RawCc<T, O> {
         let result = Self(non_null);
         if is_tracked {
             debug::log(|| (result.debug_name(), "new (CcBoxWithGcHeader)"));
+            space.on_tracked_alloc();
         } else {
             debug::log(|| (result.debug_name(), "new (CcBox)"));
         }

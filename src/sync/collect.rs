@@ -101,6 +101,11 @@ impl AbstractObjectSpace for ThreadedObjectSpace {
             ccdyn_vptr: Cell::new(CcDummy::ccdyn_vptr()),
         }
     }
+
+    #[inline]
+    fn on_tracked_alloc(&self) {
+        // TODO: Add auto-collection support for ThreadedObjectSpace.
+    }
 }
 
 impl Default for ThreadedObjectSpace {
