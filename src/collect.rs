@@ -177,11 +177,20 @@ impl ObjectSpace {
 
     /// Collect cyclic garbage tracked by this [`ObjectSpace`](struct.ObjectSpace.html).
     /// Return the number of objects collected.
+    ///
+    /// If collection is already in progress (e.g. called from a `Drop` impl
+    /// during an ongoing collection), this is a no-op and returns 0.
     pub fn collect_cycles(&self) -> usize {
+        if self.collecting.get() {
+            return 0;
+        }
+        self.collecting.set(true);
         self.alloc_since_last_collect.set(0);
         let list = self.list.borrow();
         let list: &GcHeader = list.inner();
-        collect_list(list, ())
+        let count = collect_list(list, ());
+        self.collecting.set(false);
+        count
     }
 
     /// Constructs a new [`Cc<T>`](type.Cc.html) in this

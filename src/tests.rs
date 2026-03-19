@@ -646,7 +646,7 @@ fn test_auto_collect_disabled() {
 #[test]
 fn test_threshold_api() {
     let space = ObjectSpace::default();
-    assert_eq!(space.get_threshold(), 700); // default
+    assert_eq!(space.get_threshold(), 4096); // default
 
     space.set_threshold(100);
     assert_eq!(space.get_threshold(), 100);
