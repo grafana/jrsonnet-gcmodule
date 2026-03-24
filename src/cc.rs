@@ -196,6 +196,7 @@ impl<T: Trace, O: AbstractObjectSpace> RawCc<T, O> {
             let leaked = Box::leak(boxed);
             space.insert(&leaked.header, &leaked.cc_box);
             let ptr: *mut RawCcBox<T, O> = &raw mut leaked.cc_box;
+            space.maybe_collect();
             ptr
         } else {
             Box::into_raw(Box::new(cc_box))

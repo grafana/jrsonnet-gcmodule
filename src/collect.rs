@@ -58,6 +58,9 @@ use std::ptr::without_provenance;
 pub struct ObjectSpace {
     /// Linked list to the tracked objects.
     pub(crate) list: RefCell<OwnedGcHeader>,
+    pub(crate) current: Cell<usize>,
+    pub(crate) threshold: Cell<usize>,
+    pub(crate) should_collect: Cell<bool>,
 
     /// Mark `ObjectSpace` as `!Send` and `!Sync`. This enforces thread-exclusive
     /// access to the linked list so methods can use `&self` instead of
@@ -75,6 +78,8 @@ pub trait AbstractObjectSpace: 'static + Sized {
 
     /// Remove from linked list.
     fn remove(header: &Self::Header);
+
+    fn maybe_collect(&self) { }
 
     /// Create a `RefCount` object.
     fn new_ref_count(&self, tracked: bool) -> Self::RefCount;
@@ -101,6 +106,11 @@ impl AbstractObjectSpace for ObjectSpace {
             (*header).ccdyn_vptr.set(fat_ptr[1]);
         }
         prev.next.set(header);
+        
+        self.current.update(|current| current + 1);
+        if self.current.get() >= self.threshold.get() {
+            self.should_collect.set(true);
+        }
     }
 
     #[inline]
@@ -116,6 +126,16 @@ impl AbstractObjectSpace for ObjectSpace {
             (*next).prev.set(prev);
         }
         header.next.set(std::ptr::null_mut());
+    }
+
+    #[inline]
+    fn maybe_collect(&self) {
+        if self.should_collect.get() {
+            self.collect_cycles();
+            self.current.set(0);
+            self.threshold.update(|threshold| (threshold + (threshold / 2)).next_multiple_of(8));
+            self.should_collect.set(false);  
+        }
     }
 
     #[inline]
@@ -135,6 +155,9 @@ impl Default for ObjectSpace {
         let header = new_gc_list();
         Self {
             list: RefCell::new(header),
+            current: Cell::new(0),
+            threshold: Cell::new(DEFAULT_COLLECTION_THRESHOLD),
+            should_collect: Cell::new(false),
             _phantom: PhantomData,
         }
     }
@@ -169,7 +192,9 @@ impl ObjectSpace {
     /// Otherwise the collector might fail to collect cycles.
     pub fn create<T: Trace>(&self, value: T) -> Cc<T> {
         // `&mut self` ensures thread-exclusive access.
-        Cc::new_in_space(value, self)
+        let cc = Cc::new_in_space(value, self);
+        self.maybe_collect();
+        cc
     }
 
     /// Leak all objects allocated in this space
@@ -263,6 +288,8 @@ pub fn collect_thread_cycles() -> usize {
 pub fn count_thread_tracked() -> usize {
     THREAD_OBJECT_SPACE.with(|list| list.count_tracked())
 }
+
+pub(crate) const DEFAULT_COLLECTION_THRESHOLD: usize = 4096;
 
 thread_local!(pub(crate) static THREAD_OBJECT_SPACE: ObjectSpace = ObjectSpace::default());
 
