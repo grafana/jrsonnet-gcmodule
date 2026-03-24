@@ -285,8 +285,7 @@ pub use trace_impls::TraceBox;
 
 pub use cc::{Cc, RawCc, RawWeak, Weak};
 pub use collect::{
-    ObjectSpace, collect_thread_cycles, count_thread_tracked, get_thread_collect_threshold,
-    set_thread_collect_threshold, with_thread_object_space,
+    ObjectSpace, collect_thread_cycles, count_thread_tracked, with_thread_object_space,
 };
 pub use trace::{Acyclic, Trace, Tracer};
 

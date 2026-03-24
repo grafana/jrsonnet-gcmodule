@@ -59,17 +59,6 @@ pub struct ObjectSpace {
     /// Linked list to the tracked objects.
     pub(crate) list: RefCell<OwnedGcHeader>,
 
-    /// Number of tracked allocations since the last collection.
-    alloc_since_last_collect: Cell<usize>,
-
-    /// Auto-collection threshold. When `alloc_since_last_collect` exceeds this
-    /// value, `collect_cycles()` is triggered automatically. Set to 0 to disable.
-    /// Default: 700 (same as CPython's generation 0 threshold).
-    threshold: Cell<usize>,
-
-    /// Guard against re-entrant collection (e.g. collect triggered during collect).
-    collecting: Cell<bool>,
-
     /// Mark `ObjectSpace` as `!Send` and `!Sync`. This enforces thread-exclusive
     /// access to the linked list so methods can use `&self` instead of
     /// `&mut self`, together with usage of interior mutability.
@@ -91,9 +80,6 @@ pub trait AbstractObjectSpace: 'static + Sized {
     fn new_ref_count(&self, tracked: bool) -> Self::RefCount;
 
     fn empty_header(&self) -> Self::Header;
-
-    /// Called after a tracked object is allocated. May trigger auto-collection.
-    fn on_tracked_alloc(&self);
 }
 
 impl AbstractObjectSpace for ObjectSpace {
@@ -141,15 +127,7 @@ impl AbstractObjectSpace for ObjectSpace {
     fn empty_header(&self) -> Self::Header {
         GcHeader::empty()
     }
-
-    #[inline]
-    fn on_tracked_alloc(&self) {
-        self.on_tracked_alloc();
-    }
 }
-
-/// Default auto-collection threshold (same as CPython's generation 0).
-const DEFAULT_THRESHOLD: usize = 4096;
 
 impl Default for ObjectSpace {
     /// Constructs an empty [`ObjectSpace`](struct.ObjectSpace.html).
@@ -157,9 +135,6 @@ impl Default for ObjectSpace {
         let header = new_gc_list();
         Self {
             list: RefCell::new(header),
-            alloc_since_last_collect: Cell::new(0),
-            threshold: Cell::new(DEFAULT_THRESHOLD),
-            collecting: Cell::new(false),
             _phantom: PhantomData,
         }
     }
@@ -181,15 +156,9 @@ impl ObjectSpace {
     /// If collection is already in progress (e.g. called from a `Drop` impl
     /// during an ongoing collection), this is a no-op and returns 0.
     pub fn collect_cycles(&self) -> usize {
-        if self.collecting.get() {
-            return 0;
-        }
-        self.collecting.set(true);
-        self.alloc_since_last_collect.set(0);
         let list = self.list.borrow();
         let list: &GcHeader = list.inner();
         let count = collect_list(list, ());
-        self.collecting.set(false);
         count
     }
 
@@ -206,50 +175,6 @@ impl ObjectSpace {
     /// Leak all objects allocated in this space
     pub fn leak(&self) {
         *self.list.borrow_mut() = new_gc_list();
-    }
-
-    /// Set the auto-collection threshold. Collection is triggered automatically
-    /// when the number of tracked allocations since the last collection exceeds
-    /// this value. Set to 0 to disable auto-collection.
-    pub fn set_threshold(&self, threshold: usize) {
-        self.threshold.set(threshold);
-    }
-
-    /// Get the current auto-collection threshold.
-    pub fn get_threshold(&self) -> usize {
-        self.threshold.get()
-    }
-
-    /// Disable automatic cycle collection. Cycles will only be collected
-    /// by explicit calls to [`collect_cycles`](struct.ObjectSpace.html#method.collect_cycles)
-    /// or [`collect_thread_cycles`](fn.collect_thread_cycles.html).
-    pub fn disable_auto_collect(&self) {
-        self.threshold.set(0);
-    }
-
-    /// Called after a tracked object is allocated in this space.
-    /// Triggers auto-collection if the threshold is exceeded.
-    pub(crate) fn on_tracked_alloc(&self) {
-        let count = self.alloc_since_last_collect.get() + 1;
-        self.alloc_since_last_collect.set(count);
-        let threshold = self.threshold.get();
-        if threshold > 0 && count > threshold {
-            self.maybe_collect();
-            self.threshold.set((threshold + (threshold / 2)).next_power_of_two());
-        }
-    }
-
-    /// Attempt to collect cycles if not already collecting.
-    fn maybe_collect(&self) {
-        if self.collecting.get() {
-            return;
-        }
-        self.collecting.set(true);
-        self.alloc_since_last_collect.set(0);
-        let list = self.list.borrow();
-        let list: &GcHeader = list.inner();
-        collect_list(list, ());
-        self.collecting.set(false);
     }
 
     // TODO: Consider implementing "merge" or method to collect multiple spaces
@@ -340,18 +265,6 @@ pub fn count_thread_tracked() -> usize {
 }
 
 thread_local!(pub(crate) static THREAD_OBJECT_SPACE: ObjectSpace = ObjectSpace::default());
-
-/// Set the auto-collection threshold for the current thread's object space.
-/// Collection is triggered automatically when the number of tracked allocations
-/// since the last collection exceeds this value. Set to 0 to disable.
-pub fn set_thread_collect_threshold(threshold: usize) {
-    THREAD_OBJECT_SPACE.with(|space| space.set_threshold(threshold))
-}
-
-/// Get the auto-collection threshold for the current thread's object space.
-pub fn get_thread_collect_threshold() -> usize {
-    THREAD_OBJECT_SPACE.with(|space| space.get_threshold())
-}
 
 /// Acquire reference to thread-local global object space
 pub fn with_thread_object_space<R>(handler: impl FnOnce(&ObjectSpace) -> R) -> R {
